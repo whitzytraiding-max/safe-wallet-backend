@@ -12,11 +12,14 @@ app.use(express.json())
 app.get('/health', (_req, res) => res.json({ status: 'ok', chain: 'arbitrum-sepolia' }))
 app.use('/api/wallet', walletRouter)
 
-app.listen(PORT, () => {
-  console.log(`Safe Wallet backend running on :${PORT}`)
-  console.log(`Chain: Arbitrum Sepolia (421614)`)
-  if (!process.env.RELAYER_PRIVATE_KEY) {
-    console.warn('⚠️  RELAYER_PRIVATE_KEY not set — wallet deployment will fail')
-    console.warn('   Copy .env.example to .env and add a funded Arbitrum Sepolia key')
-  }
-})
+// Local dev: start server directly. Vercel: export app as default handler.
+if (process.env.VERCEL !== '1') {
+  app.listen(PORT, () => {
+    console.log(`Safe Wallet backend running on :${PORT}`)
+    if (!process.env.RELAYER_PRIVATE_KEY) {
+      console.warn('⚠️  RELAYER_PRIVATE_KEY not set — wallet deployment will fail')
+    }
+  })
+}
+
+export default app

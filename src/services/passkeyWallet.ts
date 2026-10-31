@@ -1,4 +1,4 @@
-import Safe, { SafeFactory } from '@safe-global/protocol-kit'
+import Safe, { SafeFactory, EthSafeSignature } from '@safe-global/protocol-kit'
 import {
   createPublicClient,
   createWalletClient,
@@ -19,6 +19,7 @@ import {
   RELAYER_PRIVATE_KEY,
   SAFE_ADDRESSES,
   WEBAUTHN_SIGNER_FACTORY,
+  WEBAUTHN_SHARED_SIGNER,
   P256_VERIFIER,
 } from '../config.js'
 
@@ -100,7 +101,11 @@ export async function deploySafe(passkeyX: bigint, passkeyY: bigint): Promise<Ad
     provider: RPC_URL,
     signer: RELAYER_PRIVATE_KEY,
     contractNetworks: {
-      [String(CHAIN.id)]: SAFE_ADDRESSES,
+      [String(CHAIN.id)]: {
+        ...SAFE_ADDRESSES,
+        safeWebAuthnSignerFactoryAddress: WEBAUTHN_SIGNER_FACTORY,
+        safeWebAuthnSharedSignerAddress: WEBAUTHN_SHARED_SIGNER,
+      },
     },
   })
 
@@ -129,7 +134,7 @@ export async function buildTransaction(
     provider: RPC_URL,
     signer: RELAYER_PRIVATE_KEY,
     safeAddress,
-    contractNetworks: { [String(CHAIN.id)]: SAFE_ADDRESSES },
+    contractNetworks: { [String(CHAIN.id)]: { ...SAFE_ADDRESSES, safeWebAuthnSignerFactoryAddress: WEBAUTHN_SIGNER_FACTORY, safeWebAuthnSharedSignerAddress: WEBAUTHN_SHARED_SIGNER } },
   })
 
   const safeTransaction = await safe.createTransaction({
@@ -195,12 +200,12 @@ export async function executeTransaction(
     provider: RPC_URL,
     signer: RELAYER_PRIVATE_KEY,
     safeAddress,
-    contractNetworks: { [String(CHAIN.id)]: SAFE_ADDRESSES },
+    contractNetworks: { [String(CHAIN.id)]: { ...SAFE_ADDRESSES, safeWebAuthnSignerFactoryAddress: WEBAUTHN_SIGNER_FACTORY, safeWebAuthnSharedSignerAddress: WEBAUTHN_SHARED_SIGNER } },
   })
 
   // Add the passkey signature to the transaction
   const signedTx = await safe.copyTransaction(safeTransaction as any)
-  signedTx.addSignature({ signer: signerAddress, data: fullSig, isContractSignature: true })
+  signedTx.addSignature(new EthSafeSignature(signerAddress, fullSig, true))
 
   const result = await safe.executeTransaction(signedTx)
   const receipt = await (result.transactionResponse as any)?.wait()

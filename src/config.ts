@@ -23,6 +23,7 @@ export const SAFE_ADDRESSES = {
 
 // Safe WebAuthn signer factory (deployed via CREATE2, same address on all chains)
 export const WEBAUTHN_SIGNER_FACTORY = '0xF7488fFbe67327ac9f37D5F722d83Fc900852Fbf' as const
+export const WEBAUTHN_SHARED_SIGNER  = '0xfD90FAd33ee8b58f32c00aceEad1358e4AFC23f9' as const
 
 // P-256 (secp256r1) verifier — precompile available on Arbitrum
 export const P256_VERIFIER = '0x0000000000000000000000000000000000000100' as const

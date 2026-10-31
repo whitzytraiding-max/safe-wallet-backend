@@ -2,7 +2,7 @@
 
 Node.js / TypeScript backend that acts as a gas relayer for a passkey-secured [Safe](https://safe.global) smart account wallet on **Arbitrum Sepolia** testnet.
 
-**Live API:** `https://safe-wallet-backend.vercel.app`
+**Live API:** `https://backend-whitzy.vercel.app`
 
 ## What it does
 

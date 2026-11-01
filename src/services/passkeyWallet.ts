@@ -80,9 +80,9 @@ export async function deployPasskeySignerIfNeeded(x: bigint, y: bigint): Promise
   const code = await publicClient.getCode({ address: signerAddress })
   if (code && code !== '0x') return signerAddress
 
-  // Deploy via factory
+  // Deploy via factory — wait for confirmation so the nonce advances before deploySafe sends next tx
   const { client, account } = relayerClient()
-  await client.writeContract({
+  const hash = await client.writeContract({
     address: WEBAUTHN_SIGNER_FACTORY,
     abi: signerFactoryAbi,
     functionName: 'createSigner',
@@ -90,6 +90,7 @@ export async function deployPasskeySignerIfNeeded(x: bigint, y: bigint): Promise
     account,
     chain: CHAIN,
   })
+  await publicClient.waitForTransactionReceipt({ hash })
 
   return signerAddress
 }

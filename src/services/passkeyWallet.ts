@@ -110,19 +110,12 @@ export async function deploySafe(passkeyX: bigint, passkeyY: bigint): Promise<Ad
     },
   })
 
-  const safeConfig = {
-    owners: [signerAddress],
-    threshold: 1,
-  }
+  const safeConfig = { owners: [signerAddress], threshold: 1 }
 
-  // Check if already deployed
+  // Return the counterfactual address — Safe deploys on first transaction.
+  // This avoids a multi-tx nonce race on serverless infrastructure.
   const predictedAddress = await safeFactory.predictSafeAddress(safeConfig)
-  const code = await publicClient.getCode({ address: predictedAddress as Address })
-  if (code && code !== '0x') return predictedAddress as Address
-
-  // Deploy
-  const safe = await safeFactory.deploySafe({ safeAccountConfig: safeConfig })
-  return await safe.getAddress() as Address
+  return predictedAddress as Address
 }
 
 export async function buildTransaction(

@@ -127,3 +127,4 @@ npm run dev      # tsx watch on :3001
 ## Repo companion
 
 Mobile app: [safe-wallet-expo](https://github.com/whitzytraiding-max/safe-wallet-expo)
+

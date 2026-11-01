@@ -112,10 +112,10 @@ export async function deploySafe(passkeyX: bigint, passkeyY: bigint): Promise<Ad
 
   const safeConfig = { owners: [signerAddress], threshold: 1 }
 
-  // Return the counterfactual address — Safe deploys on first transaction.
-  // This avoids a multi-tx nonce race on serverless infrastructure.
-  const predictedAddress = await safeFactory.predictSafeAddress(safeConfig)
-  return predictedAddress as Address
+  // Deploy Safe — nonce race is avoided because deployPasskeySignerIfNeeded
+  // waits for the createSigner receipt before returning.
+  const safe = await safeFactory.deploySafe({ safeAccountConfig: safeConfig })
+  return await safe.getAddress() as Address
 }
 
 export async function buildTransaction(

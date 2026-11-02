@@ -1,4 +1,6 @@
-import Safe, { SafeFactory, EthSafeSignature } from '@safe-global/protocol-kit'
+import SafeModule, { SafeFactory, EthSafeSignature } from '@safe-global/protocol-kit'
+// protocol-kit is CJS; in Node.js ESM the default import is the exports object, not the class
+const Safe = ((SafeModule as any).default ?? SafeModule) as typeof SafeModule
 import { ethers } from 'ethers'
 import {
   createPublicClient,

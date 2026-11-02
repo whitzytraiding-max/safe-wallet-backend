@@ -6,6 +6,8 @@ import {
   isAddress,
   parseEther,
   parseUnits,
+  formatEther,
+  formatUnits,
   encodeFunctionData,
 } from 'viem'
 import {
@@ -15,7 +17,7 @@ import {
   getPasskeySignerAddress,
 } from '../services/passkeyWallet.js'
 import { getWalletBalances } from '../services/balance.js'
-import { TOKENS } from '../config.js'
+import { TOKENS, SAFE_TX_SERVICE_URL } from '../config.js'
 
 export const walletRouter = Router()
 
@@ -82,14 +84,119 @@ walletRouter.get('/:address/balance', async (req: Request, res: Response) => {
   }
 })
 
+const ERC20_TRANSFER_SELECTOR = '0xa9059cbb'
+
+interface SafeTxServiceItem {
+  txType: string
+  // Multisig tx fields
+  isExecuted?: boolean
+  isSuccessful?: boolean
+  executionDate?: string
+  to?: string
+  value?: string
+  data?: string | null
+  transactionHash?: string
+  safeTxHash?: string
+  // Ethereum tx fields
+  txHash?: string
+  transfers?: Array<{
+    type: string
+    value: string
+    from: string
+    to: string
+    tokenInfo?: { symbol: string; decimals: number } | null
+  }>
+}
+
 // GET /api/wallet/:address/transactions
-// Returns empty array for now — transactions require an indexer
 walletRouter.get('/:address/transactions', async (req: Request, res: Response) => {
   try {
     const { address } = req.params
     if (!isAddress(address)) return res.status(400).json({ error: 'Invalid address' })
-    // Future: query Safe Transaction Service or an indexer
-    res.json([])
+
+    const url = `${SAFE_TX_SERVICE_URL}/api/v1/safes/${address}/all-transactions/?executed=true&queued=false&limit=50`
+    let items: SafeTxServiceItem[] = []
+    try {
+      const r = await fetch(url, { headers: { Accept: 'application/json' } })
+      if (r.ok) {
+        const body = await r.json() as { results?: SafeTxServiceItem[] }
+        items = body.results ?? []
+      }
+    } catch {
+      // Safe TX service unreachable — return empty list gracefully
+    }
+
+    const txs: Array<{
+      hash: string; type: string; amount: string; symbol: string;
+      to: string; from: string; timestamp: number; status: string;
+    }> = []
+
+    for (const item of items) {
+      if (item.txType === 'MULTISIG_TRANSACTION' && item.isExecuted) {
+        const ts = item.executionDate ? new Date(item.executionDate).getTime() : Date.now()
+        let type = 'contract'
+        let amount = '0'
+        let symbol = 'ETH'
+        let toAddr = item.to ?? ''
+
+        const ethValue = BigInt(item.value || '0')
+        const hasData = item.data && item.data !== '0x'
+
+        if (ethValue > 0n && !hasData) {
+          type = 'send'
+          amount = formatEther(ethValue)
+          symbol = 'ETH'
+        } else if (hasData && item.data!.startsWith(ERC20_TRANSFER_SELECTOR)) {
+          type = 'send'
+          const abiAmount = BigInt('0x' + item.data!.slice(74, 138))
+          if (item.to?.toLowerCase() === TOKENS.USDC.toLowerCase()) {
+            symbol = 'USDC'; amount = formatUnits(abiAmount, 6)
+            // decode actual recipient from calldata
+            toAddr = '0x' + item.data!.slice(34, 74)
+          } else if (item.to?.toLowerCase() === TOKENS.ARB.toLowerCase()) {
+            symbol = 'ARB'; amount = formatUnits(abiAmount, 18)
+            toAddr = '0x' + item.data!.slice(34, 74)
+          }
+        }
+
+        txs.push({
+          hash: item.transactionHash ?? item.safeTxHash ?? '',
+          type,
+          amount,
+          symbol,
+          to: toAddr,
+          from: address,
+          timestamp: ts,
+          status: item.isSuccessful ? 'confirmed' : 'failed',
+        })
+      } else if (item.txType === 'ETHEREUM_TRANSACTION') {
+        const ts = item.executionDate ? new Date(item.executionDate).getTime() : Date.now()
+        for (const transfer of item.transfers ?? []) {
+          let amount = '0'
+          let symbol = 'ETH'
+          if (transfer.type === 'ETHER_TRANSFER') {
+            amount = formatEther(BigInt(transfer.value || '0'))
+            symbol = 'ETH'
+          } else if (transfer.type === 'ERC20_TRANSFER') {
+            const dec = transfer.tokenInfo?.decimals ?? 18
+            amount = formatUnits(BigInt(transfer.value || '0'), dec)
+            symbol = transfer.tokenInfo?.symbol ?? 'TOKEN'
+          }
+          txs.push({
+            hash: item.txHash ?? '',
+            type: 'receive',
+            amount,
+            symbol,
+            to: address,
+            from: transfer.from ?? '',
+            timestamp: ts,
+            status: 'confirmed',
+          })
+        }
+      }
+    }
+
+    res.json(txs)
   } catch (err: unknown) {
     res.status(500).json({ error: String(err) })
   }

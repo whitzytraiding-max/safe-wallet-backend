@@ -1,0 +1,17 @@
+services:
+  - type: web
+    name: safe-wallet-backend
+    runtime: node
+    region: singapore
+    plan: free
+    buildCommand: npm install && npm run build
+    startCommand: npm start
+    envVars:
+      - key: NODE_ENV
+        value: production
+      - key: PORT
+        value: "3001"
+      - key: RELAYER_PRIVATE_KEY
+        sync: false
+      - key: ALCHEMY_RPC_URL
+        value: ""

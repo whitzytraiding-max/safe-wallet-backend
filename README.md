@@ -1,43 +1,35 @@
 # Safe Wallet — Relayer Backend
 
-Node.js / TypeScript backend that acts as a gas relayer for a passkey-secured [Safe](https://safe.global) smart account wallet on **Arbitrum Sepolia** testnet.
+Node.js / TypeScript relayer backend for a passkey-secured [Safe](https://safe.global) smart account wallet on **Arbitrum Sepolia** testnet.
 
 **Live API:** `https://backend-whitzy.vercel.app`
 
-## What it does
+## How it works
 
-The backend sits between the mobile app and the blockchain. It holds a funded **relayer EOA** that pays gas on behalf of users, so users never need ETH in their own wallet to get started.
+The backend is a stateless gas relayer. It holds a funded relayer EOA that pays gas on behalf of users, so users never need ETH in their wallet before their first send.
 
 ```
-iPhone (passkey sign) → backend → Arbitrum Sepolia
-                                    ├─ SafeWebAuthnSignerFactory (deploy signer contract)
-                                    ├─ SafeProxyFactory (deploy Safe)
-                                    └─ Safe.execTransaction (relay signed tx)
+iPhone (Face ID) → backend → Arbitrum Sepolia
+                               ├─ SafeWebAuthnSignerFactory.createSigner(x, y, verifier)
+                               ├─ SafeProxyFactory.createProxyWithNonce(...)
+                               └─ Safe.execTransaction(webauthnSig)
 ```
-
-## Architecture
 
 ### Why Safe smart accounts?
 
-A standard EOA wallet is secured by a single private key — lose the key, lose everything. Safe smart accounts are contracts with configurable owners and thresholds. Here, the single owner is a **WebAuthn signer contract** whose public key lives in the iPhone's Secure Enclave. There is no seed phrase, no private key the user ever sees.
+Safe smart accounts are ownerless contracts with configurable signers and thresholds. The single owner here is a **SafeWebAuthnSigner** contract whose P-256 public key comes from the device's Secure Enclave. No seed phrase, no exported private key.
 
-### Why passkeys (WebAuthn)?
-
-Passkeys use the device's Secure Enclave (iOS) or TPM (Android/Windows). The private key never leaves the chip. Authentication is P-256 (secp256r1) signatures under the hood — the same curve Ethereum's precompile `0x0100` verifies natively on Arbitrum.
-
-### Signature flow
+### WebAuthn → Safe signature flow
 
 ```
-1. Mobile builds a Safe transaction hash
-2. Mobile calls WebAuthn `navigator.credentials.get()` → iPhone prompts Face ID
-3. Secure Enclave signs the hash with the passkey private key (P-256)
-4. Mobile sends: authenticatorData, clientDataFields, r, s to /api/wallet/send/execute
-5. Backend packs these into the Safe contract-signature format:
-      [signerAddress (32 bytes)] [offset (32 bytes)] [sigType=0 (1 byte)]
-      [webAuthnSig length] [webAuthnSig bytes]
-6. Backend calls safe.executeTransaction() — relayer pays gas
-7. Returns txHash + Arbiscan link
+1. /send/prepare  — builds the Safe tx, returns safeTxHash + txParams
+2. Mobile          — uses base64url(safeTxHash) as the WebAuthn challenge for Face ID
+3. Secure Enclave — signs: sha256(authenticatorData ‖ sha256(clientDataJSON))
+4. /send/execute  — packs (authenticatorData, clientDataFields, r, s) into the Safe
+                     contract-signature format and relays the transaction
 ```
+
+The stateless design avoids any server-side tx store: `prepare` returns the raw tx params back to the client, and `execute` reconstructs the Safe transaction from them.
 
 ### Contract addresses (Arbitrum Sepolia)
 
@@ -47,24 +39,26 @@ Passkeys use the device's Secure Enclave (iOS) or TPM (Android/Windows). The pri
 | SafeProxyFactory | `0x4e1DCf7AD4e460CfD30791CCC4F9c8a4f820ec67` |
 | SafeWebAuthnSignerFactory | `0xF7488fFbe67327ac9f37D5F722d83Fc900852Fbf` |
 | SafeWebAuthnSharedSigner | `0xfD90FAd33ee8b58f32c00aceEad1358e4AFC23f9` |
-| P-256 Verifier (precompile) | `0x0000000000000000000000000000000000000100` |
+| P-256 Verifier (Daimo) | `0xc2b78104907F722DABAc4C69f826a522B2754De4` |
+
+> The EIP-7212 precompile (`0x100`) is not active on Arbitrum Sepolia. The Daimo pure-Solidity verifier is used instead and is deployed at the same deterministic address across chains.
 
 ## API
 
 | Method | Path | Description |
 |---|---|---|
 | `GET` | `/health` | Liveness check |
-| `POST` | `/api/wallet/create` | Deploy passkey signer + Safe, returns `safeAddress` |
+| `POST` | `/api/wallet/create` | Deploy signer + Safe, returns addresses |
 | `GET` | `/api/wallet/:address/balance` | ETH / USDC / ARB balances |
-| `GET` | `/api/wallet/:address/transactions` | Transaction history (stub — needs indexer) |
-| `POST` | `/api/wallet/send/prepare` | Build Safe tx, returns `safeTxHash` to sign |
-| `POST` | `/api/wallet/send/execute` | Execute signed Safe tx, returns `txHash` |
+| `GET` | `/api/wallet/:address/transactions` | Transaction history (stub) |
+| `POST` | `/api/wallet/send/prepare` | Build Safe tx, return `safeTxHash` + `txParams` |
+| `POST` | `/api/wallet/send/execute` | Submit signed tx, return `txHash` |
 
 ### POST /api/wallet/create
 
 ```json
 // Request
-{ "x": "0x<pubkeyX as 256-bit hex>", "y": "0x<pubkeyY as 256-bit hex>" }
+{ "x": "0x<pubkeyX 256-bit hex>", "y": "0x<pubkeyY 256-bit hex>" }
 
 // Response
 {
@@ -75,17 +69,30 @@ Passkeys use the device's Secure Enclave (iOS) or TPM (Android/Windows). The pri
 }
 ```
 
+### POST /api/wallet/send/prepare
+
+```json
+// Request
+{ "safeAddress": "0x...", "to": "0x...", "amount": "0.001", "token": "ETH" }
+
+// Response
+{
+  "safeTxHash": "0x...",
+  "txParams": { "safeAddress": "0x...", "txTo": "0x...", "txValue": "1000000000000000", "txData": "0x" }
+}
+```
+
 ### POST /api/wallet/send/execute
 
 ```json
 // Request
 {
-  "safeTxHash": "0x...",
   "signerAddress": "0x...",
   "authenticatorData": "0x...",
-  "clientDataFields": "\"origin\":\"https://...\",\"crossOrigin\":false",
+  "clientDataFields": ",\"origin\":\"https://...\",\"crossOrigin\":false}",
   "r": "12345...",
-  "s": "67890..."
+  "s": "67890...",
+  "txParams": { "safeAddress": "0x...", "txTo": "0x...", "txValue": "...", "txData": "0x" }
 }
 
 // Response
@@ -97,14 +104,14 @@ Passkeys use the device's Secure Enclave (iOS) or TPM (Android/Windows). The pri
 - **Runtime**: Node.js 20, TypeScript (ESM)
 - **Framework**: Express
 - **Chain interaction**: [viem](https://viem.sh) v2
-- **Safe SDK**: `@safe-global/protocol-kit` v4 + `@safe-global/api-kit` v2
-- **Deploy**: Vercel serverless (single function)
+- **Safe SDK**: `@safe-global/protocol-kit` v4
+- **Deploy**: Vercel serverless
 
-## Running locally
+## Local development
 
 ```bash
 cp .env.example .env
-# Fill in RELAYER_PRIVATE_KEY and optionally ALCHEMY_RPC_URL
+# Set RELAYER_PRIVATE_KEY to a testnet EOA funded with Arbitrum Sepolia ETH
 npm install
 npm run dev      # tsx watch on :3001
 ```
@@ -113,18 +120,17 @@ npm run dev      # tsx watch on :3001
 
 | Variable | Required | Description |
 |---|---|---|
-| `RELAYER_PRIVATE_KEY` | Yes | EOA that pays gas for all deployments + transactions |
-| `ALCHEMY_RPC_URL` | No | Falls back to public Arbitrum Sepolia RPC |
+| `RELAYER_PRIVATE_KEY` | Yes | EOA private key — pays gas for all deployments and relayed txs |
+| `ALCHEMY_RPC_URL` | No | Falls back to the public Arbitrum Sepolia RPC |
 
-## What's production-missing
+## Production gaps
 
-- **Persistent pending tx store** — currently in-memory `Map`; needs Redis or a DB
-- **Real tx history** — needs a blockchain indexer (The Graph / Alchemy Transfers API)
-- **Rate limiting** — relayer is open; a funded attacker could drain it
 - **Mainnet contract addresses** — config swap only; all logic is chain-agnostic
-- **Token price feeds** — USD values are hardcoded; needs Chainlink or CoinGecko
+- **Token price feeds** — ETH/ARB prices are hardcoded; replace with Chainlink
+- **Rate limiting** — relayer is open; add per-user limits to protect the relayer balance
+- **Transaction history** — stub endpoint; needs a blockchain indexer (The Graph or Alchemy)
+- **Account recovery** — no guardian/secondary owner; add as a second Safe owner
 
-## Repo companion
+## Companion app
 
-Mobile app: [safe-wallet-expo](https://github.com/whitzytraiding-max/safe-wallet-expo)
-
+Mobile frontend: [safe-wallet-expo](https://github.com/whitzytraiding-max/safe-wallet-expo)

@@ -1,7 +1,7 @@
 import Safe, { SafeFactory, EthSafeSignature } from '@safe-global/protocol-kit'
+import { ethers } from 'ethers'
 import {
   createPublicClient,
-  createWalletClient,
   http,
   encodeFunctionData,
   encodeAbiParameters,
@@ -12,7 +12,6 @@ import {
   type Hex,
   type Address,
 } from 'viem'
-import { privateKeyToAccount } from 'viem/accounts'
 import {
   CHAIN,
   RPC_URL,
@@ -24,73 +23,44 @@ import {
 } from '../config.js'
 
 const signerFactoryAbi = [
-  {
-    name: 'createSigner',
-    type: 'function',
-    inputs: [
-      { name: 'x', type: 'uint256' },
-      { name: 'y', type: 'uint256' },
-      { name: 'verifiers', type: 'uint176' },
-    ],
-    outputs: [{ name: 'signer', type: 'address' }],
-    stateMutability: 'nonpayable',
-  },
-  {
-    name: 'getSigner',
-    type: 'function',
-    inputs: [
-      { name: 'x', type: 'uint256' },
-      { name: 'y', type: 'uint256' },
-      { name: 'verifiers', type: 'uint176' },
-    ],
-    outputs: [{ name: 'signer', type: 'address' }],
-    stateMutability: 'view',
-  },
-] as const
+  'function createSigner(uint256 x, uint256 y, uint176 verifiers) returns (address signer)',
+  'function getSigner(uint256 x, uint256 y, uint176 verifiers) view returns (address signer)',
+]
 
 const publicClient = createPublicClient({ chain: CHAIN, transport: http(RPC_URL) })
 
-function relayerClient() {
-  const account = privateKeyToAccount(RELAYER_PRIVATE_KEY)
-  return { client: createWalletClient({ account, chain: CHAIN, transport: http(RPC_URL) }), account }
+function getRelayerWallet() {
+  const provider = new ethers.JsonRpcProvider(RPC_URL)
+  return new ethers.Wallet(RELAYER_PRIVATE_KEY, provider)
 }
 
-// Combine P-256 verifier address into the uint176 verifiers field Safe expects
 function buildVerifiers(): bigint {
-  // verifiers = P256_VERIFIER address packed into uint176
   return BigInt(P256_VERIFIER)
 }
 
 export async function getPasskeySignerAddress(x: bigint, y: bigint): Promise<Address> {
-  const verifiers = buildVerifiers()
-  const address = await publicClient.readContract({
-    address: WEBAUTHN_SIGNER_FACTORY,
-    abi: signerFactoryAbi,
-    functionName: 'getSigner',
-    args: [x, y, verifiers],
-  })
-  return address
+  const wallet = getRelayerWallet()
+  const factory = new ethers.Contract(WEBAUTHN_SIGNER_FACTORY, signerFactoryAbi, wallet)
+  const address = await factory.getSigner(x, y, buildVerifiers())
+  return address as Address
 }
 
 export async function deployPasskeySignerIfNeeded(x: bigint, y: bigint): Promise<Address> {
-  const verifiers = buildVerifiers()
-  const signerAddress = await getPasskeySignerAddress(x, y)
+  const wallet = getRelayerWallet()
+  const factory = new ethers.Contract(WEBAUTHN_SIGNER_FACTORY, signerFactoryAbi, wallet)
+  const signerAddress: Address = await factory.getSigner(x, y, buildVerifiers())
 
   // Check if already deployed
   const code = await publicClient.getCode({ address: signerAddress })
   if (code && code !== '0x') return signerAddress
 
-  // Deploy via factory — wait for confirmation so the nonce advances before deploySafe sends next tx
-  const { client, account } = relayerClient()
-  const hash = await client.writeContract({
-    address: WEBAUTHN_SIGNER_FACTORY,
-    abi: signerFactoryAbi,
-    functionName: 'createSigner',
-    args: [x, y, verifiers],
-    account,
-    chain: CHAIN,
-  })
-  await publicClient.waitForTransactionReceipt({ hash })
+  // Deploy signer via ethers.js — tx.wait() blocks until the tx is mined and the wallet's
+  // internal nonce counter advances, so the next tx from this wallet uses the correct nonce.
+  const tx = await factory.createSigner(x, y, buildVerifiers())
+  await tx.wait()
+
+  // Brief pause to let the RPC propagate the confirmed state before SafeFactory reads it
+  await new Promise(r => setTimeout(r, 2000))
 
   return signerAddress
 }
@@ -101,19 +71,13 @@ export async function deploySafe(passkeyX: bigint, passkeyY: bigint): Promise<Ad
   const safeFactory = await SafeFactory.init({
     provider: RPC_URL,
     signer: RELAYER_PRIVATE_KEY,
+    safeVersion: '1.4.1',
     contractNetworks: {
-      [String(CHAIN.id)]: {
-        ...SAFE_ADDRESSES,
-        safeWebAuthnSignerFactoryAddress: WEBAUTHN_SIGNER_FACTORY,
-        safeWebAuthnSharedSignerAddress: WEBAUTHN_SHARED_SIGNER,
-      },
+      [String(CHAIN.id)]: SAFE_ADDRESSES as any,
     },
   })
 
   const safeConfig = { owners: [signerAddress], threshold: 1 }
-
-  // Deploy Safe — nonce race is avoided because deployPasskeySignerIfNeeded
-  // waits for the createSigner receipt before returning.
   const safe = await safeFactory.deploySafe({ safeAccountConfig: safeConfig })
   return await safe.getAddress() as Address
 }

@@ -153,8 +153,9 @@ export async function executeTransaction(
   r: bigint,
   s: bigint,
 ): Promise<Hex> {
+  // webauthnSig is the payload passed to SafeWebAuthnSigner.isValidSignature
+  // EthSafeSignature(..., true) (dynamic=true) wraps it in the correct Safe contract-sig format
   const webauthnSig = packWebAuthnSignature(authenticatorData, clientDataFields, r, s)
-  const fullSig = buildContractSignature(signerAddress, webauthnSig)
 
   const safe = await Safe.init({
     provider: RPC_URL,
@@ -165,7 +166,7 @@ export async function executeTransaction(
 
   // Add the passkey signature to the transaction
   const signedTx = await safe.copyTransaction(safeTransaction as any)
-  signedTx.addSignature(new EthSafeSignature(signerAddress, fullSig, true))
+  signedTx.addSignature(new EthSafeSignature(signerAddress, webauthnSig, true))
 
   const result = await safe.executeTransaction(signedTx)
   const receipt = await (result.transactionResponse as any)?.wait()

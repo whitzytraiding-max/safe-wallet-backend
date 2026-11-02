@@ -32,8 +32,6 @@ const erc20TransferAbi = [
   },
 ] as const
 
-// In-memory pending tx store (replace with Redis/DB in production)
-const pendingTxs = new Map<string, { safeAddress: string; safeTransaction: unknown }>()
 
 // POST /api/wallet/create
 // Body: { x: "0x...", y: "0x..." }
@@ -143,15 +141,18 @@ walletRouter.post('/send/prepare', async (req: Request, res: Response) => {
       return res.status(400).json({ error: `Unsupported token: ${token}` })
     }
 
-    const { safeTxHash, safeTransaction } = await buildTransaction(
+    const { safeTxHash } = await buildTransaction(
       safeAddress as Address,
       txTo,
       txValue,
       txData,
     )
 
-    pendingTxs.set(safeTxHash, { safeAddress, safeTransaction })
-    res.json({ safeTxHash })
+    // Return tx params to client so execute can reconstruct without server-side state
+    res.json({
+      safeTxHash,
+      txParams: { safeAddress, txTo, txValue: txValue.toString(), txData },
+    })
   } catch (err: unknown) {
     console.error('/send/prepare error:', err)
     res.status(500).json({ error: String(err) })
@@ -159,28 +160,33 @@ walletRouter.post('/send/prepare', async (req: Request, res: Response) => {
 })
 
 // POST /api/wallet/send/execute
-// Body: { safeTxHash, signerAddress, authenticatorData, clientDataFields, r, s }
+// Body: { signerAddress, authenticatorData, clientDataFields, r, s, txParams: { safeAddress, txTo, txValue, txData } }
 walletRouter.post('/send/execute', async (req: Request, res: Response) => {
   try {
-    const { safeTxHash, signerAddress, authenticatorData, clientDataFields, r, s } = req.body as {
-      safeTxHash: Hex
+    const { signerAddress, authenticatorData, clientDataFields, r, s, txParams } = req.body as {
       signerAddress: Address
       authenticatorData: Hex
       clientDataFields: string
       r: string
       s: string
+      txParams: { safeAddress: string; txTo: string; txValue: string; txData: string }
     }
 
-    if (!safeTxHash || !signerAddress || !authenticatorData || !clientDataFields || !r || !s) {
+    if (!signerAddress || !authenticatorData || !clientDataFields || !r || !s || !txParams) {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
-    const pending = pendingTxs.get(safeTxHash)
-    if (!pending) return res.status(404).json({ error: 'Transaction not found or expired' })
+    // Reconstruct the safeTransaction from the original params (stateless — no server-side map)
+    const { safeTransaction } = await buildTransaction(
+      txParams.safeAddress as Address,
+      txParams.txTo as Address,
+      BigInt(txParams.txValue),
+      txParams.txData as Hex,
+    )
 
     const txHash = await executeTransaction(
-      pending.safeAddress as Address,
-      pending.safeTransaction,
+      txParams.safeAddress as Address,
+      safeTransaction,
       signerAddress,
       authenticatorData,
       clientDataFields,
@@ -188,7 +194,6 @@ walletRouter.post('/send/execute', async (req: Request, res: Response) => {
       BigInt(s),
     )
 
-    pendingTxs.delete(safeTxHash)
     res.json({
       txHash,
       explorerUrl: `https://sepolia.arbiscan.io/tx/${txHash}`,

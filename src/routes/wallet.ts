@@ -176,6 +176,12 @@ walletRouter.post('/send/execute', async (req: Request, res: Response) => {
       return res.status(400).json({ error: 'Missing required fields' })
     }
 
+    console.log('[execute] signerAddress:', signerAddress)
+    console.log('[execute] authenticatorData len:', authenticatorData.length)
+    console.log('[execute] clientDataFields:', clientDataFields)
+    console.log('[execute] r:', r.slice(0, 20) + '...')
+    console.log('[execute] s:', s.slice(0, 20) + '...')
+
     // Reconstruct the safeTransaction from the original params (stateless — no server-side map)
     const { safeTransaction } = await buildTransaction(
       txParams.safeAddress as Address,

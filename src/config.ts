@@ -25,8 +25,9 @@ export const SAFE_ADDRESSES = {
 export const WEBAUTHN_SIGNER_FACTORY = '0xF7488fFbe67327ac9f37D5F722d83Fc900852Fbf' as const
 export const WEBAUTHN_SHARED_SIGNER  = '0xfD90FAd33ee8b58f32c00aceEad1358e4AFC23f9' as const
 
-// P-256 (secp256r1) verifier — precompile available on Arbitrum
-export const P256_VERIFIER = '0x0000000000000000000000000000000000000100' as const
+// P-256 (secp256r1) verifier — Daimo pure-Solidity verifier (same address across chains via CREATE2)
+// The EIP-7212 precompile at 0x100 is NOT active on Arbitrum Sepolia
+export const P256_VERIFIER = '0xc2b78104907F722DABAc4C69f826a522B2754De4' as const
 
 export const RELAYER_PRIVATE_KEY = (process.env.RELAYER_PRIVATE_KEY || '') as `0x${string}`
 

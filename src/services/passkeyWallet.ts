@@ -153,9 +153,36 @@ export async function executeTransaction(
   r: bigint,
   s: bigint,
 ): Promise<Hex> {
-  // webauthnSig is the payload passed to SafeWebAuthnSigner.isValidSignature
-  // EthSafeSignature(..., true) (dynamic=true) wraps it in the correct Safe contract-sig format
   const webauthnSig = packWebAuthnSignature(authenticatorData, clientDataFields, r, s)
+
+  // -- DEBUG --
+  const safe0 = await Safe.init({
+    provider: RPC_URL, signer: RELAYER_PRIVATE_KEY, safeAddress,
+    contractNetworks: { [String(CHAIN.id)]: { ...SAFE_ADDRESSES, safeWebAuthnSignerFactoryAddress: WEBAUTHN_SIGNER_FACTORY, safeWebAuthnSharedSignerAddress: WEBAUTHN_SHARED_SIGNER } },
+  })
+  const debugTxHash = await safe0.getTransactionHash(safeTransaction as any) as Hex
+  console.log('[execute] safeTxHash:', debugTxHash)
+  console.log('[execute] clientDataFields:', JSON.stringify(clientDataFields))
+  console.log('[execute] clientDataFields ends with }:', clientDataFields.endsWith('}'))
+  // Call isValidSignature(bytes32,bytes) directly — bypasses Safe, tests WebAuthn sig only
+  try {
+    const sigResult = await publicClient.readContract({
+      address: signerAddress,
+      abi: [{
+        name: 'isValidSignature',
+        type: 'function',
+        inputs: [{ name: 'hash', type: 'bytes32' }, { name: 'signature', type: 'bytes' }],
+        outputs: [{ name: '', type: 'bytes4' }],
+        stateMutability: 'view',
+      }] as const,
+      functionName: 'isValidSignature',
+      args: [debugTxHash, webauthnSig],
+    })
+    console.log('[execute] isValidSignature(bytes32) result:', sigResult)
+  } catch (e) {
+    console.log('[execute] isValidSignature(bytes32) error:', String(e).slice(0, 300))
+  }
+  // -- END DEBUG --
 
   const safe = await Safe.init({
     provider: RPC_URL,
@@ -164,7 +191,6 @@ export async function executeTransaction(
     contractNetworks: { [String(CHAIN.id)]: { ...SAFE_ADDRESSES, safeWebAuthnSignerFactoryAddress: WEBAUTHN_SIGNER_FACTORY, safeWebAuthnSharedSignerAddress: WEBAUTHN_SHARED_SIGNER } },
   })
 
-  // Add the passkey signature to the transaction
   const signedTx = await safe.copyTransaction(safeTransaction as any)
   signedTx.addSignature(new EthSafeSignature(signerAddress, webauthnSig, true))
 
